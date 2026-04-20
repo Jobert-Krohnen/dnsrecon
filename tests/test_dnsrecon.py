@@ -1,4 +1,7 @@
 from unittest.mock import patch, MagicMock
+
+import httpx
+
 from dnsrecon import cli
 
 
@@ -59,6 +62,107 @@ def test_general_enum_bing_addresses_feed_whois(monkeypatch):
         )
 
     assert '192.0.2.1' in seen_ips, f'Bing address not propagated to WHOIS: {seen_ips!r}'
+
+
+def test_general_enum_survives_crtsh_http_error():
+    """A persistent crt.sh 502 must not abort the scan. Reproduces issue #503."""
+    res = _stub_resolver_minimal()
+    error = httpx.HTTPStatusError(
+        message='502',
+        request=httpx.Request(url='https://crt.sh', method='GET'),
+        response=httpx.Response(status_code=502),
+    )
+    with patch('dnsrecon.cli.check_wildcard', return_value=set()), \
+            patch('dnsrecon.cli.dns_sec_check'), \
+            patch('dnsrecon.cli.brute_srv', return_value=[]), \
+            patch('dnsrecon.cli.scrape_crtsh', side_effect=error) as mock_crt:
+        result = cli.general_enum(
+            res=res,
+            domain='example.com',
+            do_axfr=False,
+            do_bing=False,
+            do_yandex=False,
+            do_spf=False,
+            do_whois=False,
+            do_crt=True,
+            zw=False,
+            request_timeout=3.0,
+        )
+
+    assert isinstance(result, list)  # did not raise
+    mock_crt.assert_called_once_with('example.com')
+
+
+def test_general_enum_survives_bing_http_error():
+    """A persistent Bing timeout must not abort the scan."""
+    res = _stub_resolver_minimal()
+    with patch('dnsrecon.cli.check_wildcard', return_value=set()), \
+            patch('dnsrecon.cli.dns_sec_check'), \
+            patch('dnsrecon.cli.brute_srv', return_value=[]), \
+            patch('dnsrecon.cli.scrape_bing', side_effect=httpx.TimeoutException('timeout')) as mock_bing:
+        result = cli.general_enum(
+            res=res,
+            domain='example.com',
+            do_axfr=False,
+            do_bing=True,
+            do_yandex=False,
+            do_spf=False,
+            do_whois=False,
+            do_crt=False,
+            zw=False,
+            request_timeout=3.0,
+        )
+
+    assert isinstance(result, list)
+    mock_bing.assert_called_once_with('example.com')
+
+
+def test_general_enum_survives_yandex_http_error():
+    """A persistent Yandex failure must not abort the scan."""
+    res = _stub_resolver_minimal()
+    with patch('dnsrecon.cli.check_wildcard', return_value=set()), \
+            patch('dnsrecon.cli.dns_sec_check'), \
+            patch('dnsrecon.cli.brute_srv', return_value=[]), \
+            patch('dnsrecon.cli.scrape_yandex', side_effect=httpx.TimeoutException('timeout')) as mock_yandex:
+        result = cli.general_enum(
+            res=res,
+            domain='example.com',
+            do_axfr=False,
+            do_bing=False,
+            do_yandex=True,
+            do_spf=False,
+            do_whois=False,
+            do_crt=False,
+            zw=False,
+            request_timeout=3.0,
+        )
+
+    assert isinstance(result, list)
+    mock_yandex.assert_called_once_with('example.com')
+
+
+def test_general_enum_survives_whois_failure():
+    """A WHOIS socket error must not abort the scan."""
+    res = _stub_resolver_minimal()
+    with patch('dnsrecon.cli.check_wildcard', return_value=set()), \
+            patch('dnsrecon.cli.dns_sec_check'), \
+            patch('dnsrecon.cli.brute_srv', return_value=[]), \
+            patch('dnsrecon.cli.whois_ips', side_effect=TimeoutError('whois timeout')) as mock_whois:
+        result = cli.general_enum(
+            res=res,
+            domain='example.com',
+            do_axfr=False,
+            do_bing=False,
+            do_yandex=False,
+            do_spf=False,
+            do_whois=True,
+            do_crt=False,
+            zw=False,
+            request_timeout=3.0,
+        )
+
+    assert isinstance(result, list)
+    mock_whois.assert_called_once()
 
 
 def test_check_wildcard():
